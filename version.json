@@ -1,0 +1,5 @@
+{
+  "version": "zr",
+  "released": "2026-08-05",
+  "note": "加诊断日志+终极保险：刷新后若quiz模块index与持久化不一致则强制重渲染；记录刷新诊断信息到localStorage便于定位"
+}

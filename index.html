@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <!-- iOS 适配：禁止缩放、检测全屏、视口 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <!-- iOS Safari 全屏模式 -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="独行">
+  <!-- iOS 自动转换电话/日期 关闭 -->
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
+  <!-- 禁用缓存（PWA 模式下防止旧版本） -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+
+  <title>独行 · 工作台</title>
+
+  <!-- Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' fill='%23fdfcf7'/><path d='M 256 460 L 256 256' stroke='%237a9a7a' stroke-width='6' fill='none' stroke-linecap='round'/><ellipse cx='256' cy='200' rx='52' ry='85' fill='%2388a878'/><ellipse cx='190' cy='290' rx='42' ry='14' fill='%2388a878' transform='rotate(-35 190 290)'/><ellipse cx='320' cy='340' rx='42' ry='14' fill='%2388a878' transform='rotate(40 320 340)'/></svg>">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png?v=leaf">
+  <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png?v=leaf">
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.json">
+
+  <!-- 苹果手机桌面图标（180x180，圆角自动应用） -->
+  <link rel="apple-touch-icon" href="icons/icon-180.png?v=leaf">
+  <link rel="apple-touch-icon" sizes="152x152" href="icons/icon-152.png?v=leaf">
+  <link rel="apple-touch-icon" sizes="167x167" href="icons/icon-167.png?v=leaf">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png?v=leaf">
+  <link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png?v=leaf">
+
+  <!-- 启动画面 -->
+  <link rel="apple-touch-startup-image" href="icons/splash-750.png?v=leaf">
+
+  <link rel="stylesheet" href="styles.css?v=20260805zr">
+<script src="https://beacon.cdn.qq.com/sdk/4.5.9/beacon_web.min.js"></script>
+<script>
+(function(){
+  try{
+    var beacon=new BeaconAction({
+      appkey:'0WEB06U85YBSLJNL',
+      versionCode:'1.0.0',
+      channelID:'share',
+      delay:1000,
+      sessionDuration:30*60*1000,
+      isOversea:false,
+      needReportRqdEvent:false
+    });
+    beacon.onDirectUserAction('preview_page_view',{
+      'url':location.href,
+      'referrer':document.referrer,
+      'title':document.title,
+      'sandbox_id':'cef892eba28b4453af4a471fa231703e'
+    });
+  }catch(e){}
+})();
+</script></head>
+<body>
+  <div id="app">
+    <!-- ========== 顶部栏 ========== -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="nav-toggle" id="navToggle" title="折叠/展开导航">
+          <span class="hamburger"></span>
+          <span class="hamburger"></span>
+          <span class="hamburger"></span>
+        </button>
+        <div class="logo-wrapper">
+          <div class="motivational-quote" id="motivationalQuote"></div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="date-display" id="dateDisplay"></div>
+        <span class="version-badge" id="versionBadge" title="当前版本号">v zr</span>
+        <button class="refresh-btn" id="refreshBtn" title="刷新页面数据（不丢失已录入内容）" onclick="App.refresh()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+        </button>
+        <div class="streak-badge" id="streakBadge" title="累计打卡天数">
+          <span class="streak-icon" id="streakIcon"></span>
+          <span class="streak-count" id="streakCount">0</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 侧栏遮罩（移动端） -->
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <div class="main-wrapper">
+      <!-- ========== 左侧导航栏 ========== -->
+      <nav class="sidebar collapsed" id="sidebar">
+        <ul class="nav-list">
+          <li class="nav-item active" data-module="plan" data-icon="plan">
+            <span class="nav-icon"></span>
+            <span class="nav-text">每日计划</span>
+          </li>
+          <li class="nav-item" data-module="news" data-icon="news">
+            <span class="nav-icon"></span>
+            <span class="nav-text">每日新闻</span>
+          </li>
+          <li class="nav-item" data-module="quiz" data-icon="book">
+            <span class="nav-icon"></span>
+            <span class="nav-text">时政常识</span>
+          </li>
+          <li class="nav-item" data-module="essay" data-icon="pen">
+            <span class="nav-icon"></span>
+            <span class="nav-text">申论素材</span>
+          </li>
+          <li class="nav-item" data-module="formula" data-icon="formula">
+            <span class="nav-icon"></span>
+            <span class="nav-text">公考必背</span>
+          </li>
+          <li class="nav-item" data-module="idiom" data-icon="target">
+            <span class="nav-icon"></span>
+            <span class="nav-text">成语背诵</span>
+          </li>
+          <li class="nav-item" data-module="resources" data-icon="compass">
+            <span class="nav-icon"></span>
+            <span class="nav-text">练习</span>
+          </li>
+          <li class="nav-item" data-module="english" data-icon="globe">
+            <span class="nav-icon"></span>
+            <span class="nav-text">英语</span>
+          </li>
+          <li class="nav-item" data-module="reading" data-icon="reading">
+            <span class="nav-icon"></span>
+            <span class="nav-text">每日阅读</span>
+          </li>
+          <li class="nav-item" data-module="exercise" data-icon="dumbbell">
+            <span class="nav-icon"></span>
+            <span class="nav-text">锻炼</span>
+          </li>
+          <li class="nav-item" data-module="interview" data-icon="interview">
+            <span class="nav-icon"></span>
+            <span class="nav-text">面试专区</span>
+          </li>
+        </ul>
+        <div class="sidebar-footer">
+          <button class="reset-btn" id="dataBtn" title="导入/导出数据">
+            <span class="reset-btn-icon" id="dataBtnIcon"></span>
+            <span class="nav-text">数据管理</span>
+          </button>
+        </div>
+      </nav>
+
+      <!-- ========== 主内容区 ========== -->
+      <main class="content" id="content">
+        <!-- 各模块内容动态渲染 -->
+      </main>
+    </div>
+
+    <!-- ========== 数据管理模态框 ========== -->
+    <div class="data-modal-overlay" id="dataModal" style="display:none;">
+      <div class="data-modal">
+        <div class="data-modal-header">
+          <span class="data-modal-title">数据管理</span>
+          <button class="data-modal-close" onclick="DataManager.close()">×</button>
+        </div>
+        <div class="data-modal-body">
+          <div class="data-modal-section">
+            <div class="data-modal-section-title">导出数据</div>
+            <p class="data-modal-desc">将所有录入内容（计划、答题记录、锻炼日志、番茄树等）导出为 JSON 文件，保存到本地。</p>
+            <button class="btn btn-green btn-large" onclick="DataManager.exportData()">导出全部数据</button>
+            <button class="btn btn-secondary btn-large" style="margin-top:8px;" onclick="DataManager.copyData()">复制数据到剪贴板</button>
+            <p class="data-modal-desc" style="margin-top:8px;">桌面 PWA 下载可能失效？改用"复制"，再粘贴到备忘录 / 云文档即可永久保存。</p>
+          </div>
+          <div class="data-modal-section">
+            <div class="data-modal-section-title">导出代码包</div>
+            <p class="data-modal-desc">将所有源码文件打包为 ZIP 下载。换新会话时上传即可继续修改工作台。</p>
+            <button class="btn btn-green btn-large" onclick="DataManager.exportCodePackage()">导出代码包 (ZIP)</button>
+          </div>
+          <div class="data-modal-section">
+            <div class="data-modal-section-title">导入数据</div>
+            <p class="data-modal-desc">从之前导出的 JSON 文件恢复数据。<strong>注意：导入会覆盖当前所有数据。</strong></p>
+            <input type="file" id="dataImportFile" accept=".json" style="display:none;" onchange="DataManager.importData(event)">
+            <button class="btn btn-primary btn-large" onclick="document.getElementById('dataImportFile').click()">选择文件并导入</button>
+          </div>
+          <div class="data-modal-section">
+            <div class="data-modal-section-title">数据统计</div>
+            <div class="data-modal-stats" id="dataModalStats"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 底部状态栏 ========== -->
+    <footer class="statusbar">
+      <div class="status-item">
+        <span class="status-label">今日完成</span>
+        <span class="status-value" id="todayCompleted">0</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">学习时长</span>
+        <span class="status-value" id="studyTime">0min</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">成语打卡</span>
+        <span class="status-value" id="idiomStreak">0天</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">累计天数</span>
+        <span class="status-value" id="totalDays">1</span>
+      </div>
+    </footer>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="data/icons.js?v=20260804b"></script>
+<script src="data/seed-data.js?v=20260806g"></script>
+<script src="data/idiom-quiz-data.js?v=20260804a"></script>
+<script src="data/high-idioms.js?v=20260804a"></script>
+<!-- 时政题库 -->
+<script src="data/quiz/politics-quiz-1.js?v=20260806a"></script>
+<script src="data/quiz/politics-quiz-2.js?v=20260806a"></script>
+<script src="data/quiz/politics-quiz-3.js?v=20260806a"></script>
+<script src="data/quiz/politics-quiz-4.js?v=20260806a"></script>
+<script src="data/quiz/politics-quiz-5.js?v=20260806a"></script>
+<!-- 常识题库 -->
+<script src="data/quiz/common-quiz-1.js?v=20260806a"></script>
+<script src="data/quiz/common-quiz-2.js?v=20260806a"></script>
+<script src="data/quiz/common-quiz-3.js?v=20260806a"></script>
+<script src="data/quiz/common-quiz-4.js?v=20260806a"></script>
+<script src="data/quiz/common-quiz-5.js?v=20260806a"></script>
+<script src="data/quiz/common-quiz-6.js?v=20260806a"></script>
+<script src="data/quiz/common-quiz-7.js?v=20260806a"></script>
+<script src="data/quiz/real-common-quiz.js?v=20260806a"></script>
+  <script src="node_modules/jszip/dist/jszip.min.js?v=20260805"></script>
+  <script src="app.js?v=20260805zr"></script>
+</body>
+</html>
