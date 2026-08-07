@@ -12,7 +12,7 @@ function getLocalDateStr(d = new Date()) {
 }
 
 // 当前前端版本号（每次发版自增）。配合 version.json 做自动更新自检，解决 PWA 缓存导致更新不到达的问题
-const APP_VERSION = 'zx';
+const APP_VERSION = 'zz';
 
 // ===== 全局状态 =====
 const App = {
@@ -27,7 +27,7 @@ const App = {
   interviewState: { tab: 'questions', questionFilter: 'all', questionExpanded: {}, questionSearch: '', templateFilter: 'all', templateSearch: '', recordForm: { type: '', question: '', answer: '', reflection: '', questionId: null }, showRecordForm: false },
   highIdiomState: { search: '', filter: 'all', expandedId: null },
   newsTab: 'affairs',
-  newsSectionState: { affairs: true, macro: false, hot: false, yunnan: false, theory: false },
+  newsSectionState: { affairs: true, hot: false, yunnan: false, theory: false },
 
   // 刷新页面：强制绕过 PWA/浏览器缓存重新加载，不丢失 localStorage 中的数据
   refresh() {
@@ -1225,9 +1225,6 @@ const NewsModule = {
       <div id="newsSection-affairs" style="display:${st.affairs ? 'block' : 'none'}; margin-top:16px;">
         ${this.renderAffairsContent()}
       </div>
-      <div id="newsSection-macro" style="display:${st.macro ? 'block' : 'none'}; margin-top:16px;">
-        ${this.renderMacroPolitics()}
-      </div>
       <div id="newsSection-hot" style="display:${st.hot ? 'block' : 'none'}; margin-top:16px;">
         ${this.renderHotEvents()}
       </div>
@@ -1343,8 +1340,7 @@ const NewsModule = {
   renderSectionBar() {
     const sections = [
       { key: 'affairs', label: '今日时政要闻', icon: 'news' },
-      { key: 'macro',   label: '全国宏观时政', icon: 'book' },
-      { key: 'hot',     label: '国内外热点',   icon: 'globe' },
+      { key: 'hot',     label: '国外热点',     icon: 'globe' },
       { key: 'yunnan',  label: '云南本土时政', icon: 'compass' },
       { key: 'theory',  label: '基础理论',     icon: 'pen' },
     ];
@@ -1364,7 +1360,7 @@ const NewsModule = {
   // 切换分类展开/收起
   toggleSection(key) {
     // 手风琴模式：先收起所有分类，再展开被点击的
-    const allKeys = ['affairs', 'macro', 'hot', 'yunnan', 'theory'];
+    const allKeys = ['affairs', 'hot', 'yunnan', 'theory'];
     allKeys.forEach(k => {
       App.newsSectionState[k] = false;
       const el = document.getElementById(`newsSection-${k}`);
@@ -1467,7 +1463,7 @@ const NewsModule = {
     // 优先检查24小时内的实时缓存
     const liveCache = DB.get('duxing_live_hot_cache', null);
     if (liveCache && liveCache.ts && (Date.now() - liveCache.ts < 24*60*60*1000) && liveCache.data && liveCache.data.length > 0) {
-      return this.renderLiveSectionHeader('hot', '国内外热点') + this.renderLiveSectionItems(liveCache.data, 'hot');
+      return this.renderLiveSectionHeader('hot', '国外热点') + this.renderLiveSectionItems(liveCache.data, 'hot');
     }
     const data = SEED_DATA.newsHotEvents || [];
     const sectionKey = 'hot';
@@ -1482,7 +1478,7 @@ const NewsModule = {
     }
 
     return `
-      ${this.renderSectionHeader({ title: '国内外热点事件', icon: 'globe', sectionKey, showUpdateBtn: true, updateTimeStr })}
+      ${this.renderSectionHeader({ title: '国外热点', icon: 'globe', sectionKey, showUpdateBtn: true, updateTimeStr })}
       ${shuffled.length === 0 ? '<div class="news-section-empty">暂无数据</div>' :
         shuffled.map((item, i) => this.renderNewsItem(item, i, 'hot')).join('')}
     `;
@@ -1542,13 +1538,15 @@ const NewsModule = {
     `;
   },
 
-  // 分类5：基础理论（静态展示）
+  // 分类5：基础理论（静态展示，来源可靠可查）
   renderBasicTheory() {
     const data = SEED_DATA.newsBasicTheory || [];
+    // 按分类分组统计
+    const categories = [...new Set(data.map(item => item.category))];
     return `
       <div class="news-list-header">
-        <span class="news-list-header-text">${titleIcon('pen', 18)} 基础理论</span>
-        <span class="news-update-time">静态内容</span>
+        <span class="news-list-header-text">${titleIcon('pen', 18)} 基础理论 <span style="font-size:11px;color:var(--text-tertiary,#999);font-weight:normal;">（共${data.length}条·${categories.length}个分类）</span></span>
+        <span class="news-update-time">权威来源</span>
       </div>
       ${data.length === 0 ? '<div class="news-section-empty">暂无数据</div>' :
         data.map((item, i) => this.renderTheoryItem(item, i)).join('')}
@@ -1570,6 +1568,7 @@ const NewsModule = {
         <div class="news-detail">
           <div class="news-interpretation">
             ${Utils.nl2br(item.content)}
+            ${item.source ? `<br><br><span style="font-size:12px;color:var(--text-tertiary,#999);">📖 来源：${Utils.escape(item.source)}</span>` : ''}
           </div>
         </div>
       </div>
@@ -1600,8 +1599,7 @@ const NewsModule = {
 
     const sectionEl = document.getElementById(`newsSection-${sectionKey}`);
     if (sectionEl) {
-      if (sectionKey === 'macro') sectionEl.innerHTML = this.renderMacroPolitics();
-      else if (sectionKey === 'hot') sectionEl.innerHTML = this.renderHotEvents();
+      if (sectionKey === 'hot') sectionEl.innerHTML = this.renderHotEvents();
       else if (sectionKey === 'yunnan') sectionEl.innerHTML = this.renderYunnanPolitics();
     }
     Utils.toast('已更新（内置数据·配置API Key后可抓取实时新闻）');
@@ -1610,8 +1608,7 @@ const NewsModule = {
   // 各分类的实时抓取配置
   // useAreaNews=true 表示用 areanews 地区新闻接口（更精准的地方媒体源），而非 allnews 关键词搜索
   SECTION_API_CONFIG: {
-    macro:   { col: 7, word: '', label: '全国宏观时政', useKeyword: false, useAreaNews: false },
-    hot:     { col: 8, word: '', label: '国内外热点', useKeyword: false, useAreaNews: false },
+    hot:     { col: 8, word: '', label: '国外热点', useKeyword: false, useAreaNews: false },
     yunnan:  { col: 7, word: '云南', label: '云南本土时政', useKeyword: false, useAreaNews: true, areaname: '云南' },
   },
 
@@ -1689,8 +1686,7 @@ const NewsModule = {
           : `<div style="padding:10px 14px;margin-bottom:8px;background:#fff3f3;border:1px solid #ffcdd2;border-radius:8px;color:#c62828;font-size:13px;">
               ⚠️ 实时抓取失败：${Utils.escape(errMsg)}。当前显示内置数据。
             </div>`;
-        sectionEl.innerHTML = areaNewsHint + (sectionKey === 'macro' ? this.renderMacroPolitics() :
-             sectionKey === 'hot' ? this.renderHotEvents() :
+        sectionEl.innerHTML = areaNewsHint + (sectionKey === 'hot' ? this.renderHotEvents() :
              this.renderYunnanPolitics());
       }
     }
