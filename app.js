@@ -12,7 +12,7 @@ function getLocalDateStr(d = new Date()) {
 }
 
 // 当前前端版本号（每次发版自增）。配合 version.json 做自动更新自检，解决 PWA 缓存导致更新不到达的问题
-const APP_VERSION = 'zr';
+const APP_VERSION = 'zs';
 
 // ===== 全局状态 =====
 const App = {
