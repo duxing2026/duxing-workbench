@@ -1,5 +1,5 @@
 {
-  "version": "zv",
-  "released": "2026-08-07",
-  "note": "修复天行API字段名（newslist非list）；修复日期格式；去掉rand改为按时间倒序获取最新新闻；description为空时用标题兜底"
+  "version": "zx",
+  "released": "2026-08-08",
+  "note": "云南本土新闻改用 areanews 地区新闻接口（本地媒体源，更精准）；未申请时显示友好提示和申请链接"
 }

@@ -12,7 +12,7 @@ function getLocalDateStr(d = new Date()) {
 }
 
 // 当前前端版本号（每次发版自增）。配合 version.json 做自动更新自检，解决 PWA 缓存导致更新不到达的问题
-const APP_VERSION = 'zv';
+const APP_VERSION = 'zx';
 
 // ===== 全局状态 =====
 const App = {
@@ -1438,6 +1438,11 @@ const NewsModule = {
 
   // 分类2：全国宏观时政
   renderMacroPolitics() {
+    // 优先检查24小时内的实时缓存
+    const liveCache = DB.get('duxing_live_macro_cache', null);
+    if (liveCache && liveCache.ts && (Date.now() - liveCache.ts < 24*60*60*1000) && liveCache.data && liveCache.data.length > 0) {
+      return this.renderLiveSectionHeader('macro', '全国宏观时政') + this.renderLiveSectionItems(liveCache.data, 'macro');
+    }
     const data = SEED_DATA.newsMacroPolitics || [];
     const sectionKey = 'macro';
     const seedOffset = DB.getToday('duxing_news_macro_offset', 0);
@@ -1459,6 +1464,11 @@ const NewsModule = {
 
   // 分类3：国内外热点事件
   renderHotEvents() {
+    // 优先检查24小时内的实时缓存
+    const liveCache = DB.get('duxing_live_hot_cache', null);
+    if (liveCache && liveCache.ts && (Date.now() - liveCache.ts < 24*60*60*1000) && liveCache.data && liveCache.data.length > 0) {
+      return this.renderLiveSectionHeader('hot', '国内外热点') + this.renderLiveSectionItems(liveCache.data, 'hot');
+    }
     const data = SEED_DATA.newsHotEvents || [];
     const sectionKey = 'hot';
     const seedOffset = DB.getToday('duxing_news_hot_offset', 0);
@@ -1480,6 +1490,11 @@ const NewsModule = {
 
   // 分类4：云南本土时政（4个子栏目）
   renderYunnanPolitics() {
+    // 优先检查24小时内的实时缓存
+    const liveCache = DB.get('duxing_live_yunnan_cache', null);
+    if (liveCache && liveCache.ts && (Date.now() - liveCache.ts < 24*60*60*1000) && liveCache.data && liveCache.data.length > 0) {
+      return this.renderLiveSectionHeader('yunnan', '云南本土时政') + this.renderLiveSectionItems(liveCache.data, 'yunnan');
+    }
     const data = SEED_DATA.newsYunnanPolitics || [];
     const sectionKey = 'yunnan';
     const seedOffset = DB.getToday('duxing_news_yunnan_offset', 0);
@@ -1568,6 +1583,15 @@ const NewsModule = {
       btn.classList.add('spinning');
       setTimeout(() => btn.classList.remove('spinning'), 800);
     }
+
+    // 优先尝试实时抓取
+    const apiKey = DB.get('duxing_tianapi_key', '');
+    if (apiKey) {
+      this.fetchLiveSectionNews(sectionKey, apiKey);
+      return;
+    }
+
+    // 未配置 Key → 内置数据换一批
     const offsetKey = `duxing_news_${sectionKey}_offset`;
     const timeKey = `duxing_news_${sectionKey}_update_time`;
     const offset = DB.getToday(offsetKey, 0);
@@ -1580,7 +1604,142 @@ const NewsModule = {
       else if (sectionKey === 'hot') sectionEl.innerHTML = this.renderHotEvents();
       else if (sectionKey === 'yunnan') sectionEl.innerHTML = this.renderYunnanPolitics();
     }
-    Utils.toast('已更新');
+    Utils.toast('已更新（内置数据·配置API Key后可抓取实时新闻）');
+  },
+
+  // 各分类的实时抓取配置
+  // useAreaNews=true 表示用 areanews 地区新闻接口（更精准的地方媒体源），而非 allnews 关键词搜索
+  SECTION_API_CONFIG: {
+    macro:   { col: 7, word: '', label: '全国宏观时政', useKeyword: false, useAreaNews: false },
+    hot:     { col: 8, word: '', label: '国内外热点', useKeyword: false, useAreaNews: false },
+    yunnan:  { col: 7, word: '云南', label: '云南本土时政', useKeyword: false, useAreaNews: true, areaname: '云南' },
+  },
+
+  // 实时抓取分类新闻
+  async fetchLiveSectionNews(sectionKey, apiKey) {
+    const config = this.SECTION_API_CONFIG[sectionKey];
+    if (!config) return;
+
+    try {
+      Utils.toast('正在抓取最新' + config.label + '…', 'info');
+      let url;
+      if (config.useAreaNews) {
+        // 地区新闻接口：从本地媒体源抓取，更精准
+        url = `https://apis.tianapi.com/areanews/index?key=${encodeURIComponent(apiKey)}&areaname=${encodeURIComponent(config.areaname)}&num=20`;
+      } else {
+        // 综合新闻接口
+        url = `https://apis.tianapi.com/allnews/index?key=${encodeURIComponent(apiKey)}&col=${config.col}&num=20`;
+        if (config.useKeyword && config.word) {
+          url += `&word=${encodeURIComponent(config.word)}`;
+        }
+      }
+
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      const newsList = data.result && (data.result.newslist || data.result.list);
+
+      if (data.code !== 200 || !newsList) {
+        throw new Error(data.msg || 'API返回异常');
+      }
+
+      const liveNews = newsList.map(item => ({
+        category: config.label,
+        title: item.title || '无标题',
+        date: item.ctime ? item.ctime.substring(0, 10).replace(/(\d{4})-(\d{2})-(\d{2})/, '$1年$2月$3日') : '',
+        source: item.source || '网络',
+        summary: item.description || item.title || '点击下方原文链接查看详细内容',
+        points: '来源：' + (item.source || '网络') + '\n发布时间：' + (item.ctime || '未知'),
+        examLink: '实时新闻·请自行提炼考点',
+        url: item.url || ''
+      }));
+
+      // 缓存（24小时）
+      DB.set(`duxing_live_${sectionKey}_cache`, { data: liveNews, ts: Date.now() });
+      DB.setToday(`duxing_news_${sectionKey}_update_time`, Date.now());
+
+      // 渲染
+      const sectionEl = document.getElementById(`newsSection-${sectionKey}`);
+      if (sectionEl) {
+        sectionEl.innerHTML = this.renderLiveSectionHeader(sectionKey, config.label) +
+          this.renderLiveSectionItems(liveNews, sectionKey);
+      }
+      Utils.toast('已抓取 ' + liveNews.length + ' 条' + config.label);
+    } catch (e) {
+      console.error('[' + sectionKey + '抓取失败]', e);
+      const errMsg = e.message || '未知错误';
+      // areanews 未申请时的特殊提示
+      if (config.useAreaNews && (errMsg.includes('尚未申请') || errMsg.includes('160'))) {
+        Utils.toast(config.label + '需要申请「地区新闻」接口，请见页面提示', 'error');
+      } else {
+        Utils.toast(config.label + '抓取失败：' + errMsg + '（显示内置数据）', 'error');
+      }
+      // 回退
+      const offsetKey = `duxing_news_${sectionKey}_offset`;
+      const offset = DB.getToday(offsetKey, 0);
+      DB.setToday(offsetKey, offset + 1);
+      DB.setToday(`duxing_news_${sectionKey}_update_time`, Date.now());
+      const sectionEl = document.getElementById(`newsSection-${sectionKey}`);
+      if (sectionEl) {
+        const areaNewsHint = (config.useAreaNews && (errMsg.includes('尚未申请') || errMsg.includes('160')))
+          ? `<div style="padding:10px 14px;margin-bottom:8px;background:#fff8e1;border:1px solid #ffe082;border-radius:8px;color:#e65100;font-size:13px;">
+              💡 云南本土新闻需要申请「地区新闻」接口才能精准抓取。<br>
+              请前往 <a href="https://www.tianapi.com/apiview/154" target="_blank" style="color:var(--pink-deep);text-decoration:underline;">天行数据·地区新闻</a> 申请（免费），申请成功后即可自动使用。<br>
+              当前显示内置数据。
+            </div>`
+          : `<div style="padding:10px 14px;margin-bottom:8px;background:#fff3f3;border:1px solid #ffcdd2;border-radius:8px;color:#c62828;font-size:13px;">
+              ⚠️ 实时抓取失败：${Utils.escape(errMsg)}。当前显示内置数据。
+            </div>`;
+        sectionEl.innerHTML = areaNewsHint + (sectionKey === 'macro' ? this.renderMacroPolitics() :
+             sectionKey === 'hot' ? this.renderHotEvents() :
+             this.renderYunnanPolitics());
+      }
+    }
+  },
+
+  // 渲染实时分类新闻的头部
+  renderLiveSectionHeader(sectionKey, label) {
+    let updateTimeStr = '刚刚更新';
+    const updateKey = DB.getToday(`duxing_news_${sectionKey}_update_time`, null);
+    if (updateKey) {
+      updateTimeStr = '更新于 ' + new Date(updateKey).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    }
+    return `
+      <div class="news-list-header">
+        <span class="news-list-header-text">${titleIcon('news', 18)} ${label} <span style="font-size:11px;color:#4caf50;font-weight:600;">● 实时</span></span>
+        <div class="news-update-info">
+          <span class="news-update-time">${updateTimeStr}</span>
+          <button class="news-update-btn" id="newsUpdateBtn-${sectionKey}" onclick="NewsModule.refreshSection('${sectionKey}')">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12 A9 9 0 0 1 18 5 L21 8"/><path d="M21 3 L21 8 L16 8"/><path d="M21 12 A9 9 0 0 1 6 19 L3 16"/><path d="M3 21 L3 16 L8 16"/></svg>
+            更新
+          </button>
+        </div>
+      </div>
+    `;
+  },
+
+  // 渲染实时分类新闻的条目
+  renderLiveSectionItems(liveNews, sectionKey) {
+    return liveNews.map((item, i) => `
+      <div class="news-item" id="${sectionKey}-${i}" onclick="NewsModule.toggleNewsItem('${sectionKey}', ${i})">
+        <div class="news-header">
+          <div class="news-number">${i + 1}</div>
+          <div class="news-title">
+            <span class="affair-category">📡 ${Utils.escape(item.source || '实时')}</span>
+            ${Utils.escape(item.title)}
+          </div>
+          <span class="news-expand-icon">▼</span>
+        </div>
+        <div class="news-detail">
+          <div class="news-interpretation">
+            ${item.date ? `<span class="news-date-tag">📅 ${Utils.escape(item.date)}</span><br><br>` : ''}
+            <strong>📌 内容摘要</strong><br>
+            ${Utils.nl2br(item.summary)}
+            <br><br>
+            ${item.url ? `<strong>🔗 原文链接</strong><br><a href="${Utils.escape(item.url)}" target="_blank" style="color:var(--pink-deep);">点击查看原文</a>` : ''}
+          </div>
+        </div>
+      </div>
+    `).join('');
   },
 
   // ===== 权威官媒（独立 tab） =====
