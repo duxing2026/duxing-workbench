@@ -12,7 +12,7 @@ function getLocalDateStr(d = new Date()) {
 }
 
 // 当前前端版本号（每次发版自增）。配合 version.json 做自动更新自检，解决 PWA 缓存导致更新不到达的问题
-const APP_VERSION = 'zs';
+const APP_VERSION = 'zv';
 
 // ===== 全局状态 =====
 const App = {
@@ -710,10 +710,33 @@ const DataManager = {
   open() {
     document.getElementById('dataModal').style.display = 'flex';
     this.renderStats();
+    // 回填天行 API Key
+    const keyInput = document.getElementById('tianapiKeyInput');
+    if (keyInput) keyInput.value = DB.get('duxing_tianapi_key', '') || '';
   },
 
   close() {
     document.getElementById('dataModal').style.display = 'none';
+  },
+
+  // 保存天行数据 API Key
+  saveTianapiKey() {
+    const key = document.getElementById('tianapiKeyInput').value.trim();
+    if (!key) {
+      Utils.toast('请输入 API Key', 'error');
+      return;
+    }
+    DB.set('duxing_tianapi_key', key);
+    Utils.toast('API Key 已保存，点"更新"即可抓取实时新闻');
+  },
+
+  // 清除天行数据 API Key
+  clearTianapiKey() {
+    DB.set('duxing_tianapi_key', '');
+    DB.set('duxing_live_news_cache', null);
+    const keyInput = document.getElementById('tianapiKeyInput');
+    if (keyInput) keyInput.value = '';
+    Utils.toast('已清除 API Key，将使用内置新闻数据');
   },
 
   renderStats() {
@@ -1219,10 +1242,56 @@ const NewsModule = {
 
   // 分类1：今日时政要闻内容（从原 renderAffairs 提取，逻辑零改动）
   renderAffairsContent() {
+    // 优先检查是否有 24 小时内的实时新闻缓存
+    const liveCache = DB.get('duxing_live_news_cache', null);
+    if (liveCache && liveCache.ts && (Date.now() - liveCache.ts < 24 * 60 * 60 * 1000) && liveCache.data && liveCache.data.length > 0) {
+      return this.renderLiveNewsContent(liveCache.data);
+    }
+
     const baseSeed = Utils.dateSeed();
     const seedOffset = DB.getToday('duxing_news_seed_offset', 0);
     const updateKey = DB.getToday('duxing_news_update_time', null);
-    const affairs = Utils.seededShuffle(SEED_DATA.politicsDailyAffairs, baseSeed + seedOffset * 7919);
+
+    // 按日期过滤：只显示最近 7 天的新闻
+    // 解析 "2026年8月1日" 格式的日期，计算与今天的天数差
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+    const recentAffairs = SEED_DATA.politicsDailyAffairs.filter(item => {
+      if (!item.date) return false;
+      const m = item.date.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+      if (!m) return false;
+      const itemDate = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+      itemDate.setHours(0, 0, 0, 0);
+      return (today - itemDate) >= 0 && (today - itemDate) <= SEVEN_DAYS_MS;
+    });
+
+    // 如果近一周新闻不足 3 条，补充近两周的，保证每天有内容可看
+    let displayAffairs = recentAffairs;
+    if (recentAffairs.length < 3) {
+      const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+      displayAffairs = SEED_DATA.politicsDailyAffairs.filter(item => {
+        if (!item.date) return false;
+        const m = item.date.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+        if (!m) return false;
+        const itemDate = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+        itemDate.setHours(0, 0, 0, 0);
+        return (today - itemDate) >= 0 && (today - itemDate) <= FOURTEEN_DAYS_MS;
+      });
+    }
+
+    // 按日期倒序排列（最新的在前），再做随机洗牌（保证同一天顺序稳定）
+    displayAffairs.sort((a, b) => {
+      const ma = a.date.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+      const mb = b.date.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+      if (!ma || !mb) return 0;
+      const da = new Date(parseInt(ma[1]), parseInt(ma[2]) - 1, parseInt(ma[3]));
+      const db = new Date(parseInt(mb[1]), parseInt(mb[2]) - 1, parseInt(mb[3]));
+      return db - da;
+    });
+
+    const affairs = Utils.seededShuffle(displayAffairs, baseSeed + seedOffset * 7919);
     const readState = DB.getToday('duxing_affairs_read', {});
 
     let updateTimeStr = '尚未更新';
@@ -1233,7 +1302,7 @@ const NewsModule = {
 
     return `
       <div class="news-list-header">
-        <span class="news-list-header-text">${titleIcon('news', 18)} 今日时政要闻</span>
+        <span class="news-list-header-text">${titleIcon('news', 18)} 今日时政要闻 <span style="font-size:11px;color:var(--text-tertiary,#999);font-weight:normal;">（内置数据）</span></span>
         <div class="news-update-info">
           <span class="news-update-time">${updateTimeStr}</span>
           <button class="news-update-btn" id="newsUpdateBtn" onclick="NewsModule.refreshAffairs()">
@@ -1737,17 +1806,117 @@ const NewsModule = {
       btn.classList.add('spinning');
       setTimeout(() => btn.classList.remove('spinning'), 800);
     }
-    // 种子偏移 +1，换一批要闻
+
+    // 优先尝试实时抓取天行数据 API
+    const apiKey = DB.get('duxing_tianapi_key', '');
+    if (apiKey) {
+      this.fetchLiveNews(apiKey);
+      return;
+    }
+
+    // 未配置 API Key → 回退到内置数据换一批
     const offset = DB.getToday('duxing_news_seed_offset', 0);
     DB.setToday('duxing_news_seed_offset', offset + 1);
-    // 记录更新时间
     DB.setToday('duxing_news_update_time', Date.now());
-    // 清除已读状态
     DB.setToday('duxing_affairs_read', {});
-    // 重新渲染分类1内容区域
     const sectionEl = document.getElementById('newsSection-affairs');
     if (sectionEl) sectionEl.innerHTML = this.renderAffairsContent();
-    Utils.toast('已更新时政要闻');
+    Utils.toast('已更新时政要闻（内置数据·配置API Key后可抓取实时新闻）');
+  },
+
+  // 实时抓取天行数据国内新闻（频道7=国内新闻）
+  async fetchLiveNews(apiKey) {
+    try {
+      Utils.toast('正在抓取最新时政…', 'info');
+      const url = `https://apis.tianapi.com/allnews/index?key=${encodeURIComponent(apiKey)}&col=7&num=20`;
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+
+      // 天行 API 返回字段兼容：新版 newslist，旧版 list
+      const newsList = data.result && (data.result.newslist || data.result.list);
+      if (data.code !== 200 || !newsList) {
+        throw new Error(data.msg || 'API返回异常');
+      }
+
+      // 转换为工作台统一格式
+      const liveNews = newsList.map(item => ({
+        category: '实时新闻',
+        title: item.title || '无标题',
+        date: item.ctime ? item.ctime.substring(0, 10).replace(/(\d{4})-(\d{2})-(\d{2})/, '$1年$2月$3日') : '',
+        source: item.source || '网络',
+        summary: item.description || item.title || '点击下方原文链接查看详细内容',
+        points: '来源：' + (item.source || '网络') + '\n发布时间：' + (item.ctime || '未知'),
+        examLink: '实时新闻·请自行提炼考点',
+        url: item.url || ''
+      }));
+
+      // 缓存到 localStorage（24小时有效）
+      DB.set('duxing_live_news_cache', { data: liveNews, ts: Date.now() });
+      DB.setToday('duxing_news_update_time', Date.now());
+      DB.setToday('duxing_affairs_read', {});
+
+      // 渲染实时新闻
+      const sectionEl = document.getElementById('newsSection-affairs');
+      if (sectionEl) sectionEl.innerHTML = this.renderLiveNewsContent(liveNews);
+      Utils.toast('已抓取 ' + liveNews.length + ' 条最新时政');
+    } catch (e) {
+      console.error('[时政抓取失败]', e);
+      Utils.toast('抓取失败：' + e.message + '（显示内置数据）', 'error');
+      // 回退到内置数据
+      const offset = DB.getToday('duxing_news_seed_offset', 0);
+      DB.setToday('duxing_news_seed_offset', offset + 1);
+      DB.setToday('duxing_news_update_time', Date.now());
+      const sectionEl = document.getElementById('newsSection-affairs');
+      if (sectionEl) sectionEl.innerHTML = `
+        <div style="padding:10px 14px;margin-bottom:8px;background:#fff3f3;border:1px solid #ffcdd2;border-radius:8px;color:#c62828;font-size:13px;">
+          ⚠️ 实时抓取失败：${Utils.escape(e.message)}。当前显示内置数据，请检查 API Key 是否正确。
+        </div>
+      ` + this.renderAffairsContent();
+    }
+  },
+
+  // 渲染实时抓取的新闻
+  renderLiveNewsContent(liveNews) {
+    const readState = DB.getToday('duxing_affairs_read', {});
+    let updateTimeStr = '刚刚更新';
+    const updateKey = DB.getToday('duxing_news_update_time', null);
+    if (updateKey) {
+      updateTimeStr = '更新于 ' + new Date(updateKey).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    return `
+      <div class="news-list-header">
+        <span class="news-list-header-text">${titleIcon('news', 18)} 今日时政要闻 <span style="font-size:11px;color:#4caf50;font-weight:600;">● 实时</span></span>
+        <div class="news-update-info">
+          <span class="news-update-time">${updateTimeStr}</span>
+          <button class="news-update-btn" id="newsUpdateBtn" onclick="NewsModule.refreshAffairs()">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12 A9 9 0 0 1 18 5 L21 8"/><path d="M21 3 L21 8 L16 8"/><path d="M21 12 A9 9 0 0 1 6 19 L3 16"/><path d="M3 21 L3 16 L8 16"/></svg>
+            更新
+          </button>
+        </div>
+      </div>
+      ${liveNews.map((item, i) => `
+        <div class="news-item ${readState[i] ? 'read' : ''}" id="affair-${i}" onclick="NewsModule.toggleAffair(${i})">
+          <div class="news-header">
+            <div class="news-number">${i + 1}</div>
+            <div class="news-title">
+              <span class="affair-category">📡 ${Utils.escape(item.source || '实时')}</span>
+              ${Utils.escape(item.title)}
+            </div>
+            <span class="news-expand-icon">▼</span>
+          </div>
+          <div class="news-detail">
+            <div class="news-interpretation">
+              ${item.date ? `<span class="news-date-tag">📅 ${Utils.escape(item.date)}</span><br><br>` : ''}
+              <strong>📌 内容摘要</strong><br>
+              ${Utils.nl2br(item.summary)}
+              <br><br>
+              ${item.url ? `<strong>🔗 原文链接</strong><br><a href="${Utils.escape(item.url)}" target="_blank" style="color:var(--pink-deep);">点击查看原文</a>` : ''}
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    `;
   },
 
   // 展开/折叠时政要闻

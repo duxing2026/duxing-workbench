@@ -33,7 +33,7 @@
   <!-- 启动画面 -->
   <link rel="apple-touch-startup-image" href="./icons/splash-750.png?v=leaf">
 
-  <link rel="stylesheet" href="styles.css?v=20260807zs">
+  <link rel="stylesheet" href="styles.css?v=20260807zv">
 <script src="https://beacon.cdn.qq.com/sdk/4.5.9/beacon_web.min.js"></script>
 <script>
 (function(){
@@ -176,6 +176,16 @@
             <button class="btn btn-primary btn-large" onclick="document.getElementById('dataImportFile').click()">选择文件并导入</button>
           </div>
           <div class="data-modal-section">
+            <div class="data-modal-section-title">实时新闻 API 配置</div>
+            <p class="data-modal-desc">配置天行数据 API Key 后，"今日时政"的"更新"按钮会实时抓取最新国内新闻（每天100次免费额度）。</p>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <input type="text" id="tianapiKeyInput" placeholder="粘贴天行数据 API Key" style="flex:1;min-width:200px;padding:8px 12px;border:1px solid var(--border-soft);border-radius:8px;font-size:14px;">
+              <button class="btn btn-primary" onclick="DataManager.saveTianapiKey()">保存</button>
+              <button class="btn btn-secondary" onclick="DataManager.clearTianapiKey()">清除</button>
+            </div>
+            <p class="data-modal-desc" style="margin-top:8px;font-size:12px;color:var(--text-tertiary,#999);">注册地址：tianapi.com → 注册 → 控制台 → 我的密钥KEY</p>
+          </div>
+          <div class="data-modal-section">
             <div class="data-modal-section-title">数据统计</div>
             <div class="data-modal-stats" id="dataModalStats"></div>
           </div>
@@ -225,6 +235,6 @@
 <script src="data/quiz/common-quiz-7.js?v=20260806a"></script>
 <script src="data/quiz/real-common-quiz.js?v=20260806a"></script>
   <script src="node_modules/jszip/dist/jszip.min.js?v=20260805"></script>
-  <script src="app.js?v=20260807zs"></script>
+  <script src="app.js?v=20260807zv"></script>
 </body>
 </html>
