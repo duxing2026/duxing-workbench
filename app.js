@@ -12,7 +12,7 @@ function getLocalDateStr(d = new Date()) {
 }
 
 // 当前前端版本号（每次发版自增）。配合 version.json 做自动更新自检，解决 PWA 缓存导致更新不到达的问题
-const APP_VERSION = 'zz';
+const APP_VERSION = 'zad';
 
 // ===== 全局状态 =====
 const App = {
@@ -426,6 +426,8 @@ const PomodoroModule = {
     pausedAccum: 0,
     lastStartTs: null,
     currentTreeType: 'round',
+    lastAccumSec: 0,   // 上次结算时已累计的秒数（用于按分钟增量累加专注时长）
+    historyPeriod: 'daily', // 历史统计栏：daily / monthly / yearly
   },
 
   // 从 DB 恢复会话状态
@@ -440,10 +442,20 @@ const PomodoroModule = {
     this.state.pausedAccum = s.pausedAccum || 0;
     this.state.lastStartTs = s.lastStartTs || null;
     this.state.currentTreeType = s.currentTreeType || 'round';
-    // 之前在运行 → 自动恢复计时器
+    this.state.lastAccumSec = (typeof s.lastAccumSec === 'number') ? s.lastAccumSec : this.getCurrentSeconds();
+    // 之前在运行 → 先结算后台期间长成的时间/树，再自动恢复计时器
     if (this.state.running && this.state.lastStartTs) {
+      this.settleTime();
       this.startTimer();
     }
+    this.syncTodayStats();
+    this.updateStats();
+    // 页面回到前台时立即结算（iOS 后台会暂停 setInterval，必须在此刻补偿结算）
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && this.state.running) {
+        this.settleTime();
+      }
+    });
   },
 
   // 当前树的累计秒数（0 ~ 3600+）
@@ -465,6 +477,7 @@ const PomodoroModule = {
     if (this.state.running) return;
     this.state.running = true;
     this.state.lastStartTs = Date.now();
+    this.state.lastAccumSec = this.getCurrentSeconds(); // 从当前点开始增量
     this.saveSession();
     this.startTimer();
     this.updateButtons();
@@ -477,6 +490,7 @@ const PomodoroModule = {
     this.state.pausedAccum = this.getCurrentSeconds();
     this.state.running = false;
     this.state.lastStartTs = null;
+    this.state.lastAccumSec = this.state.pausedAccum; // 同步
     this.saveSession();
     this.stopTimer();
     this.updateButtons();
@@ -490,6 +504,7 @@ const PomodoroModule = {
     this.state.pausedAccum = 0;
     this.state.lastStartTs = null;
     this.state.currentTreeType = this.getRandomTree();
+    this.state.lastAccumSec = 0; // 本棵归零
     this.saveSession();
     this.renderTree();
     this.updateTimerDisplay();
@@ -513,48 +528,127 @@ const PomodoroModule = {
   // 每秒回调 -- 核心
   tick() {
     this.checkNewDay();
-    const sec = this.getCurrentSeconds();
+    this.settleTime();
     this.updateTimerDisplay();
     this.updateTreeGrowth();
-    if (sec >= this.SECONDS_PER_TREE) {
-      this.onTreeComplete();
-    }
   },
 
-  // 一棵树长成
-  onTreeComplete() {
-    // 庆祝动画
-    const treeEl = document.getElementById('pomoTree');
-    if (treeEl) {
-      treeEl.classList.add('tree-complete');
-      setTimeout(() => treeEl.classList.remove('tree-complete'), 1200);
-    }
+  // 按天专注记录：{ dateStr: { seconds, trees } }，长期保存（跨天不清零）
+  // seconds = 当天实际专注总秒数（只累加，不取模）；trees = 当天完成的整树数
+  // 存储于 duxing_pomo_days
+  getDayRecord(dateStr) {
+    const days = DB.get('duxing_pomo_days', {});
+    if (!days[dateStr]) days[dateStr] = { seconds: 0, trees: 0 };
+    return { days, rec: days[dateStr] };
+  },
 
-    // 今日 +1
-    const today = DB.getToday('duxing_pomo_today', { todayTrees: 0, todaySeconds: 0 });
-    today.todayTrees += 1;
-    today.todaySeconds += this.SECONDS_PER_TREE;
-    DB.setToday('duxing_pomo_today', today);
+  // 把 seconds 秒专注时间累加到指定日期（跨天拆分用）
+  // 返回该日期新增的整树数
+  addFocusSeconds(dateStr, seconds) {
+    if (seconds <= 0) return 0;
+    const { days, rec } = this.getDayRecord(dateStr);
+    rec.seconds += seconds; // 专注秒数只累加，保留完整时长
+    // 整树结算：满 3600 秒计 1 棵
+    const totalTreesFull = Math.floor(rec.seconds / this.SECONDS_PER_TREE);
+    const newTrees = totalTreesFull - rec.trees;
+    if (newTrees > 0) rec.trees = totalTreesFull;
+    DB.set('duxing_pomo_days', days);
+    this.syncTodayStats();
+    return newTrees;
+  },
 
-    // 累计 +1
+  // 今日棵数与今日秒数（实时从按天记录取）
+  todayStats() {
+    const todayStr = getLocalDateStr();
+    const { rec } = this.getDayRecord(todayStr);
+    return { todayTrees: rec.trees, todaySeconds: rec.seconds };
+  },
+
+  // 把按天记录同步到旧版 duxing_pomo_today（今日键），供其他引用兼容
+  syncTodayStats() {
+    const todayStr = getLocalDateStr();
+    const { rec } = this.getDayRecord(todayStr);
+    DB.setToday('duxing_pomo_today', { todayTrees: rec.trees, todaySeconds: rec.seconds });
+  },
+
+  // 结算专注时间（统一入口）：
+  // 1. 计算自上次以来新增的完整秒数
+  // 2. 跨天时精确拆分到对应日期
+  // 3. 每满 3600 秒结算一棵树（保留树的概念）
+  // 4. 更新累计时长（长期，跨天不清零）
+  settleTime() {
+    const nowSec = this.getCurrentSeconds();
+    const lastSec = this.state.lastAccumSec;
+    if (nowSec <= lastSec) { this.state.lastAccumSec = nowSec; return; }
+
+    const addedSec = nowSec - lastSec;
+    this.state.lastAccumSec = nowSec;
+
+    // 结算前累计树数（用于对比本次新增）
+    const prevTotalTrees = this.countTotalTrees();
+
+    // 跨天拆分：把这 addedSec 秒分配到它实际发生的各自然日（内部会累加专注秒数并结算整树）
+    this.allocateSecondsAcrossDays(addedSec);
+
+    // 累计时长（长期）也加秒
     const persist = DB.get('duxing_pomo_persist', { totalSeconds: 0, totalTrees: 0, session: {} });
-    persist.totalTrees += 1;
-    persist.totalSeconds += this.SECONDS_PER_TREE;
+    persist.totalSeconds += addedSec;
+    persist.totalTrees = this.countTotalTrees(); // 树数由按天记录聚合
     DB.set('duxing_pomo_persist', persist);
 
-    Utils.toast('一棵树长成了！继续种下一棵吧~');
+    // 本次长成的树提示
+    const newTrees = this.countTotalTrees() - prevTotalTrees;
+    if (newTrees > 0) {
+      const treeEl = document.getElementById('pomoTree');
+      if (treeEl) {
+        treeEl.classList.add('tree-complete');
+        setTimeout(() => {
+          treeEl.classList.remove('tree-complete');
+          this.renderTree();
+        }, 1200);
+      }
+      Utils.toast(newTrees > 1 ? `长成了 ${newTrees} 棵树！继续加油~` : '一棵树长成了！继续种下一棵吧~');
+    }
 
-    // 重置当前树进度，随机选下一棵，继续计时
-    this.state.pausedAccum = 0;
-    this.state.lastStartTs = Date.now();
-    this.state.currentTreeType = this.getRandomTree();
-    this.saveSession();
+    this.updateStats();
+  },
 
-    // 动画结束后替换新树
-    setTimeout(() => {
-      this.renderTree();
-      this.updateStats();
-    }, 1200);
+  // 累计总棵数（从按天记录聚合，保证一致）
+  countTotalTrees() {
+    const days = DB.get('duxing_pomo_days', {});
+    let sum = 0;
+    for (const k in days) sum += days[k].trees || 0;
+    return sum;
+  },
+
+  // 把 seconds 秒精确拆分到跨过的各自然日
+  // 简化模型：由于只在运行中（lastStartTs 到 now）连续计时，跨天只可能跨 1 天
+  // 用 lastStartTs / pausedAccum 推算起点时间戳，按本地时区日界拆分
+  allocateSecondsAcrossDays(addedSec) {
+    // 本次区间起点时间戳 = now - addedSec*1000
+    const now = Date.now();
+    const startMs = now - addedSec * 1000;
+    const nowDate = getLocalDateStr(new Date(now));
+    const startDate = getLocalDateStr(new Date(startMs));
+
+    if (startDate === nowDate) {
+      // 同一天：直接记当天
+      this.addFocusSeconds(nowDate, addedSec);
+      return;
+    }
+
+    // 跨天：计算今天零点的时间戳
+    const todayZero = new Date(now);
+    todayZero.setHours(0, 0, 0, 0);
+    const todayZeroMs = todayZero.getTime();
+
+    // 起点到今天零点的秒数（属于前一天）
+    const prevDaySec = Math.max(0, Math.floor((todayZeroMs - startMs) / 1000));
+    // 今天零点到现在的秒数（属于今天）
+    const todaySec = addedSec - prevDaySec;
+
+    if (prevDaySec > 0) this.addFocusSeconds(startDate, prevDaySec);
+    if (todaySec > 0) this.addFocusSeconds(nowDate, todaySec);
   },
 
   // 跨天检测
@@ -562,6 +656,9 @@ const PomodoroModule = {
     const todayStr = getLocalDateStr();
     if (todayStr !== App.today) {
       App.today = todayStr;
+      // 若正在计时，结算一次（触发跨天拆分，把跨天前的时间记入前一天）
+      if (this.state.running) this.settleTime();
+      this.syncTodayStats();
       this.updateStats();
     }
   },
@@ -582,7 +679,8 @@ const PomodoroModule = {
       running: this.state.running,
       pausedAccum: this.state.pausedAccum,
       lastStartTs: this.state.lastStartTs,
-      currentTreeType: this.state.currentTreeType
+      currentTreeType: this.state.currentTreeType,
+      lastAccumSec: this.state.lastAccumSec
     };
     DB.set('duxing_pomo_persist', persist);
   },
@@ -593,6 +691,16 @@ const PomodoroModule = {
     const m = Math.floor((seconds % 3600) / 60);
     const s = seconds % 60;
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  },
+
+  // 时分制时长：如 2小时05分 / 45分钟 / 1小时
+  formatDuration(seconds) {
+    const totalMin = Math.floor(seconds / 60);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    if (h === 0) return `${m}分钟`;
+    if (m === 0) return `${h}小时`;
+    return `${h}小时${String(m).padStart(2,'0')}分`;
   },
 
   updateTimerDisplay() {
@@ -615,26 +723,152 @@ const PomodoroModule = {
     treeEl.style.opacity = opacity;
   },
 
+  // ===== 历史统计栏（每日/每月/每年） =====
+
+  // 切换历史统计维度
+  switchPeriod(period) {
+    this.state.historyPeriod = period;
+    document.querySelectorAll('.pomo-tab').forEach(t => {
+      t.classList.toggle('active', t.dataset.period === period);
+    });
+    this.renderHistory();
+  },
+
+  // 聚合一组日期key的总秒数与总棵数
+  aggregateDays(dateKeys) {
+    const days = DB.get('duxing_pomo_days', {});
+    let seconds = 0, trees = 0, activeDays = 0;
+    for (const k of dateKeys) {
+      const rec = days[k];
+      if (rec) {
+        seconds += rec.seconds || 0;
+        trees += rec.trees || 0;
+        if (rec.seconds > 0) activeDays++;
+      }
+    }
+    return { seconds, trees, activeDays };
+  },
+
+  // 近7天每日数据
+  getDailySeries() {
+    const days = DB.get('duxing_pomo_days', {});
+    const result = [];
+    const today = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const key = getLocalDateStr(d);
+      const rec = days[key] || { seconds: 0, trees: 0 };
+      result.push({
+        label: i === 0 ? '今天' : `${d.getMonth() + 1}/${d.getDate()}`,
+        seconds: rec.seconds || 0,
+        trees: rec.trees || 0,
+        isToday: i === 0
+      });
+    }
+    return result;
+  },
+
+  // 近6个月每月数据
+  getMonthlySeries() {
+    const days = DB.get('duxing_pomo_days', {});
+    const result = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const prefix = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const keys = Object.keys(days).filter(k => k.startsWith(prefix + '-'));
+      const agg = this.aggregateDays(keys);
+      result.push({
+        label: i === 0 ? '本月' : `${d.getMonth() + 1}月`,
+        seconds: agg.seconds, trees: agg.trees, activeDays: agg.activeDays,
+        isToday: i === 0
+      });
+    }
+    return result;
+  },
+
+  // 每年数据
+  getYearlySeries() {
+    const days = DB.get('duxing_pomo_days', {});
+    const years = {};
+    for (const k in days) {
+      const year = k.substring(0, 4);
+      if (!/^\d{4}$/.test(year)) continue;
+      if (!years[year]) years[year] = { seconds: 0, trees: 0, activeDays: 0 };
+      years[year].seconds += days[k].seconds || 0;
+      years[year].trees += days[k].trees || 0;
+      if (days[k].seconds > 0) years[year].activeDays++;
+    }
+    const sortedYears = Object.keys(years).sort();
+    const currentYear = String(new Date().getFullYear());
+    return sortedYears.map(y => ({
+      label: y === currentYear ? `${y}年` : y,
+      seconds: years[y].seconds,
+      trees: years[y].trees,
+      activeDays: years[y].activeDays,
+      isToday: y === currentYear
+    }));
+  },
+
+  // 渲染柱状图（CSS）
+  renderBarChart(series, showDays) {
+    if (!series.length) return '<div class="pomo-history-empty">暂无专注记录</div>';
+    const maxSec = Math.max(...series.map(s => s.seconds), 1);
+    const bars = series.map(s => {
+      const height = s.seconds > 0 ? Math.max(8, Math.round((s.seconds / maxSec) * 100)) : 3;
+      return `
+        <div class="pomo-bar-col ${s.isToday ? 'today' : ''}" title="${s.label} 专注${this.formatDuration(s.seconds)} · ${s.trees}棵">
+          <div class="pomo-bar-value">${s.seconds > 0 ? this.formatDuration(s.seconds) : ''}</div>
+          <div class="pomo-bar-track"><div class="pomo-bar-fill" style="height:${height}%"></div></div>
+          <div class="pomo-bar-label">${s.label}</div>
+          <div class="pomo-bar-sub">${showDays ? `${s.activeDays}天` : `${s.trees}棵`}</div>
+        </div>
+      `;
+    }).join('');
+    return `<div class="pomo-bar-chart">${bars}</div>`;
+  },
+
+  // 渲染历史统计栏
+  renderHistory() {
+    const body = document.getElementById('pomoHistoryBody');
+    if (!body) return;
+    const period = this.state.historyPeriod || 'daily';
+    let html = '';
+    if (period === 'daily') {
+      html = this.renderBarChart(this.getDailySeries(), false);
+    } else if (period === 'monthly') {
+      html = this.renderBarChart(this.getMonthlySeries(), true);
+    } else {
+      html = this.renderBarChart(this.getYearlySeries(), true);
+    }
+    body.innerHTML = html;
+  },
+
   updateStats() {
     const el = document.getElementById('pomoStats');
     if (!el) return;
-    const today = DB.getToday('duxing_pomo_today', { todayTrees: 0, todaySeconds: 0 });
+    const st = this.todayStats(); // {todayTrees, todaySeconds}
     const persist = DB.get('duxing_pomo_persist', { totalSeconds: 0, totalTrees: 0 });
-    const totalHours = (persist.totalSeconds / 3600).toFixed(1);
     el.innerHTML = `
       <div class="pomo-stat-item">
-        <span class="pomo-stat-num">${today.todayTrees}</span>
+        <span class="pomo-stat-num">${st.todayTrees}</span>
         <span class="pomo-stat-label">今日棵数</span>
+      </div>
+      <div class="pomo-stat-item">
+        <span class="pomo-stat-num">${this.formatDuration(st.todaySeconds)}</span>
+        <span class="pomo-stat-label">今日专注</span>
       </div>
       <div class="pomo-stat-item">
         <span class="pomo-stat-num">${persist.totalTrees}</span>
         <span class="pomo-stat-label">累计棵数</span>
       </div>
       <div class="pomo-stat-item">
-        <span class="pomo-stat-num">${totalHours}</span>
-        <span class="pomo-stat-label">累计小时</span>
+        <span class="pomo-stat-num">${this.formatDuration(persist.totalSeconds)}</span>
+        <span class="pomo-stat-label">累计时长</span>
       </div>
     `;
+    this.renderHistory();
   },
 
   updateButtons() {
@@ -666,6 +900,11 @@ const PomodoroModule = {
     this.updateStats();
     this.updateButtons();
     this.updateStatus();
+    // 同步历史栏当前激活标签（render 会重建 DOM，需重设）
+    const period = this.state.historyPeriod || 'daily';
+    document.querySelectorAll('.pomo-tab').forEach(t => {
+      t.classList.toggle('active', t.dataset.period === period);
+    });
     if (this.state.running && !this.state.timerInterval) {
       this.startTimer();
     }
@@ -1004,6 +1243,14 @@ ModuleRenderers.plan = function() {
         <div class="pomodoro-timer" id="pomoTimer">00:00:00</div>
         <div class="pomodoro-progress"><div class="pomodoro-progress-fill" id="pomoProgressFill" style="width: 0%"></div></div>
         <div class="pomodoro-stats" id="pomoStats"></div>
+        <div class="pomo-history">
+          <div class="pomo-history-tabs">
+            <button class="pomo-tab active" data-period="daily" onclick="PomodoroModule.switchPeriod('daily')">每日</button>
+            <button class="pomo-tab" data-period="monthly" onclick="PomodoroModule.switchPeriod('monthly')">每月</button>
+            <button class="pomo-tab" data-period="yearly" onclick="PomodoroModule.switchPeriod('yearly')">每年</button>
+          </div>
+          <div class="pomo-history-body" id="pomoHistoryBody"></div>
+        </div>
         <div class="pomodoro-buttons">
           <button class="btn btn-green" id="pomoStartBtn" onclick="PomodoroModule.start()">开始</button>
           <button class="btn btn-secondary" id="pomoPauseBtn" onclick="PomodoroModule.pause()" style="display:none;">暂停</button>
