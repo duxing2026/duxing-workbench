@@ -12,7 +12,7 @@ function getLocalDateStr(d = new Date()) {
 }
 
 // 当前前端版本号（每次发版自增）。配合 version.json 做自动更新自检，解决 PWA 缓存导致更新不到达的问题
-const APP_VERSION = 'zad';
+const APP_VERSION = 'zae';
 
 // ===== 全局状态 =====
 const App = {
@@ -420,6 +420,9 @@ const POMODORO_TREE_KEYS = Object.keys(POMODORO_TREES);
 const PomodoroModule = {
   SECONDS_PER_TREE: 3600, // 1 小时 = 1 棵树
 
+  // 莫兰迪色板：柱状图按索引循环取色，保证相邻柱子颜色不同
+  MORANDI_COLORS: ['#B5A8A0', '#A8B5A5', '#A3A8B8', '#C4B0A0', '#B8A3B0', '#9FB3B5', '#BDB39F'],
+
   state: {
     timerInterval: null,
     running: false,
@@ -497,20 +500,63 @@ const PomodoroModule = {
     this.updateStatus();
   },
 
-  // 重置当前树（不归零累计）
-  reset() {
+  // 结束当前计时段（结束按钮）：
+  // 1. 当前段全部时间结算进当日总时长（含跨天拆分）
+  // 2. 未满 1 小时的零头也累计一棵树（每段结束至少种下一棵）
+  // 3. 归零计时，换一棵新树待种
+  finish() {
+    const sec = this.getCurrentSeconds();
+    if (sec <= 0) {
+      // 本段没有专注时间：仅归零状态
+      this.stopTimer();
+      this.state.running = false;
+      this.state.pausedAccum = 0;
+      this.state.lastStartTs = null;
+      this.state.lastAccumSec = 0;
+      this.saveSession();
+      this.updateButtons();
+      this.updateStatus();
+      Utils.toast('本段还没有专注时间');
+      return;
+    }
+
+    // 1) 结算当前段全部时间到按天记录
+    this.settleTime();
+
+    // 2) 零头补树：满整小时的部分已在计时中自动结算，剩余零头结束时补 1 棵
+    let bonusTree = false;
+    if (sec % this.SECONDS_PER_TREE !== 0) {
+      bonusTree = this.addTree(getLocalDateStr());
+    }
+
+    // 3) 结束本段：归零计时、换新树
     this.stopTimer();
     this.state.running = false;
     this.state.pausedAccum = 0;
     this.state.lastStartTs = null;
+    this.state.lastAccumSec = 0;
     this.state.currentTreeType = this.getRandomTree();
-    this.state.lastAccumSec = 0; // 本棵归零
     this.saveSession();
     this.renderTree();
     this.updateTimerDisplay();
     this.updateButtons();
     this.updateStatus();
-    Utils.toast('已重置当前树');
+    this.updateStats();
+
+    const durText = sec >= 3600 ? `${(sec / 3600).toFixed(1)}小时` : `${Math.round(sec / 60)}分钟`;
+    Utils.toast(bonusTree ? `本段专注${durText}，种下了一棵树 🌱` : `本段专注${durText}，已计入今日统计`);
+  },
+
+  // 手动补一棵树到指定日期（结束按钮的零头保底）
+  addTree(dateStr) {
+    const { days, rec } = this.getDayRecord(dateStr);
+    rec.trees += 1;
+    DB.set('duxing_pomo_days', days);
+    const persist = DB.get('duxing_pomo_persist', { totalSeconds: 0, totalTrees: 0, session: {} });
+    persist.totalTrees = this.countTotalTrees();
+    DB.set('duxing_pomo_persist', persist);
+    this.syncTodayStats();
+    return true;
   },
 
   startTimer() {
@@ -576,6 +622,9 @@ const PomodoroModule = {
   // 2. 跨天时精确拆分到对应日期
   // 3. 每满 3600 秒结算一棵树（保留树的概念）
   // 4. 更新累计时长（长期，跨天不清零）
+  // 5. 每次结算都把会话（含 lastAccumSec）落盘
+  //    ★ 修复统计虚增：此前 lastAccumSec 只存内存，刷新/杀掉页面后
+  //      init() 会恢复旧值，导致整段时间被重复结算进今日专注与累计时长
   settleTime() {
     const nowSec = this.getCurrentSeconds();
     const lastSec = this.state.lastAccumSec;
@@ -590,10 +639,17 @@ const PomodoroModule = {
     // 跨天拆分：把这 addedSec 秒分配到它实际发生的各自然日（内部会累加专注秒数并结算整树）
     this.allocateSecondsAcrossDays(addedSec);
 
-    // 累计时长（长期）也加秒
+    // 累计时长（长期）加秒；会话状态（含最新 lastAccumSec）同步落盘
     const persist = DB.get('duxing_pomo_persist', { totalSeconds: 0, totalTrees: 0, session: {} });
     persist.totalSeconds += addedSec;
     persist.totalTrees = this.countTotalTrees(); // 树数由按天记录聚合
+    persist.session = {
+      running: this.state.running,
+      pausedAccum: this.state.pausedAccum,
+      lastStartTs: this.state.lastStartTs,
+      currentTreeType: this.state.currentTreeType,
+      lastAccumSec: this.state.lastAccumSec
+    };
     DB.set('duxing_pomo_persist', persist);
 
     // 本次长成的树提示
@@ -693,14 +749,10 @@ const PomodoroModule = {
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   },
 
-  // 时分制时长：如 2小时05分 / 45分钟 / 1小时
+  // 小数小时制：如 2.5小时 / 0.8小时（今日专注、累计时长、柱状图统一使用）
   formatDuration(seconds) {
-    const totalMin = Math.floor(seconds / 60);
-    const h = Math.floor(totalMin / 60);
-    const m = totalMin % 60;
-    if (h === 0) return `${m}分钟`;
-    if (m === 0) return `${h}小时`;
-    return `${h}小时${String(m).padStart(2,'0')}分`;
+    if (!seconds || seconds <= 0) return '0小时';
+    return `${(seconds / 3600).toFixed(1)}小时`;
   },
 
   updateTimerDisplay() {
@@ -811,16 +863,18 @@ const PomodoroModule = {
     }));
   },
 
-  // 渲染柱状图（CSS）
+  // 渲染柱状图（CSS）：莫兰迪色循环，相邻柱子颜色不同；今日/本期柱加深标识
   renderBarChart(series, showDays) {
     if (!series.length) return '<div class="pomo-history-empty">暂无专注记录</div>';
     const maxSec = Math.max(...series.map(s => s.seconds), 1);
-    const bars = series.map(s => {
+    const bars = series.map((s, i) => {
       const height = s.seconds > 0 ? Math.max(8, Math.round((s.seconds / maxSec) * 100)) : 3;
+      const color = this.MORANDI_COLORS[i % this.MORANDI_COLORS.length];
+      const todayStyle = s.isToday ? 'filter:brightness(0.78);' : '';
       return `
         <div class="pomo-bar-col ${s.isToday ? 'today' : ''}" title="${s.label} 专注${this.formatDuration(s.seconds)} · ${s.trees}棵">
           <div class="pomo-bar-value">${s.seconds > 0 ? this.formatDuration(s.seconds) : ''}</div>
-          <div class="pomo-bar-track"><div class="pomo-bar-fill" style="height:${height}%"></div></div>
+          <div class="pomo-bar-track"><div class="pomo-bar-fill" style="height:${height}%;background:${color};${todayStyle}"></div></div>
           <div class="pomo-bar-label">${s.label}</div>
           <div class="pomo-bar-sub">${showDays ? `${s.activeDays}天` : `${s.trees}棵`}</div>
         </div>
@@ -860,10 +914,6 @@ const PomodoroModule = {
         <span class="pomo-stat-label">今日专注</span>
       </div>
       <div class="pomo-stat-item">
-        <span class="pomo-stat-num">${persist.totalTrees}</span>
-        <span class="pomo-stat-label">累计棵数</span>
-      </div>
-      <div class="pomo-stat-item">
         <span class="pomo-stat-num">${this.formatDuration(persist.totalSeconds)}</span>
         <span class="pomo-stat-label">累计时长</span>
       </div>
@@ -876,12 +926,15 @@ const PomodoroModule = {
     const pauseBtn = document.getElementById('pomoPauseBtn');
     if (startBtn) startBtn.style.display = this.state.running ? 'none' : '';
     if (pauseBtn) pauseBtn.style.display = this.state.running ? '' : 'none';
+    // 结束按钮常驻：任何时候都可结束当前段
   },
 
   updateStatus() {
     const el = document.getElementById('pomoStatus');
     if (el) {
-      el.textContent = this.state.running ? '专注中' : '已暂停';
+      const text = this.state.running ? '专注中'
+        : (this.getCurrentSeconds() > 0 ? '已暂停' : '待开始');
+      el.textContent = text;
       el.className = 'pomodoro-status' + (this.state.running ? ' running' : '');
     }
   },
@@ -1254,7 +1307,7 @@ ModuleRenderers.plan = function() {
         <div class="pomodoro-buttons">
           <button class="btn btn-green" id="pomoStartBtn" onclick="PomodoroModule.start()">开始</button>
           <button class="btn btn-secondary" id="pomoPauseBtn" onclick="PomodoroModule.pause()" style="display:none;">暂停</button>
-          <button class="btn btn-secondary" onclick="PomodoroModule.reset()">重置</button>
+          <button class="btn btn-finish" id="pomoFinishBtn" onclick="PomodoroModule.finish()">结束</button>
         </div>
       </div>
 
