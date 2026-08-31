@@ -4930,6 +4930,100 @@ select.input-field {
   color: var(--text-secondary);
 }
 
+/* ===== 历史统计栏（每日/每月/每年） ===== */
+.pomo-history {
+  margin-top: 4px;
+  margin-bottom: 14px;
+  padding: 0 4px;
+}
+.pomo-history-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  justify-content: center;
+}
+.pomo-tab {
+  padding: 4px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all .2s;
+}
+.pomo-tab.active {
+  background: #6a8a6a;
+  border-color: #6a8a6a;
+  color: #fff;
+  font-weight: 600;
+}
+.pomo-history-body {
+  min-height: 130px;
+}
+.pomo-history-empty {
+  text-align: center;
+  color: var(--text-tertiary, #999);
+  font-size: 13px;
+  padding: 30px 0;
+}
+.pomo-bar-chart {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-around;
+  gap: 6px;
+  height: 140px;
+  padding: 0 2px;
+}
+.pomo-bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  min-width: 0;
+  gap: 2px;
+}
+.pomo-bar-value {
+  font-size: 9px;
+  color: var(--text-tertiary, #999);
+  text-align: center;
+  line-height: 1.2;
+  max-height: 26px;
+  overflow: hidden;
+  word-break: break-all;
+}
+.pomo-bar-track {
+  flex: 1;
+  width: 100%;
+  max-width: 34px;
+  display: flex;
+  align-items: flex-end;
+  background: transparent;
+}
+.pomo-bar-fill {
+  width: 100%;
+  min-height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(180deg, #6a8a6a, #4a6a4a);
+  transition: height .3s;
+}
+.pomo-bar-col.today .pomo-bar-fill {
+  background: linear-gradient(180deg, #e8848c, #c25e6e);
+}
+.pomo-bar-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-align: center;
+  white-space: nowrap;
+}
+.pomo-bar-sub {
+  font-size: 9px;
+  color: var(--text-tertiary, #aaa);
+  text-align: center;
+}
+
 /* 按钮区 */
 .pomodoro-buttons {
   display: flex;
