@@ -503,6 +503,16 @@ body {
   color: white;
 }
 
+/* 结束按钮（番茄时钟）：陶土莫兰迪色，与柱状图色系呼应 */
+.btn-finish {
+  background: linear-gradient(135deg, #C99A8E, #B07E6F);
+  color: #fff;
+}
+.btn-finish:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(176, 126, 111, 0.35);
+}
+
 .btn-small {
   padding: 6px 14px;
   font-size: 13px;
@@ -5006,11 +5016,12 @@ select.input-field {
   width: 100%;
   min-height: 3px;
   border-radius: 3px 3px 0 0;
-  background: linear-gradient(180deg, #6a8a6a, #4a6a4a);
+  background: #C9C4BC; /* 兜底色，实际由 JS 按莫兰迪色板内联指定 */
   transition: height .3s;
 }
-.pomo-bar-col.today .pomo-bar-fill {
-  background: linear-gradient(180deg, #e8848c, #c25e6e);
+.pomo-bar-col.today .pomo-bar-label {
+  font-weight: 700;
+  color: var(--text-primary);
 }
 .pomo-bar-label {
   font-size: 10px;
